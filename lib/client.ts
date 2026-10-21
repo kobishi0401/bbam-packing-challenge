@@ -1,0 +1,3 @@
+export async function api(body:unknown):Promise<any>{const r=await fetch('/api/service',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});let d:any;try{d=await r.json();}catch{throw new Error('連線中斷，請恢復網路後重試');}if(!r.ok)throw new Error(d?.error||'操作失敗');return d;}
+export function download(name:string,text:string,type='text/plain;charset=utf-8'){const u=URL.createObjectURL(new Blob([text],{type}));const a=document.createElement('a');a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000);}
+export function csvCell(v:unknown){let s=String(v??'');if(/^[=+\-@\t\r]/.test(s))s="'"+s;return '"'+s.replaceAll('"','""')+'"';}

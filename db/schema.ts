@@ -1,0 +1,4 @@
+import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+export const settings = sqliteTable('settings', { id: integer('id').primaryKey(), owner: text('owner').notNull(), salt: text('salt').notNull(), password: text('password').notNull(), failures: integer('failures').notNull().default(0), blockedUntil: integer('blocked_until').notNull().default(0) });
+export const adminSessions = sqliteTable('admin_sessions', { hash: text('hash').primaryKey(), owner: text('owner').notNull(), expires: integer('expires').notNull() });
+export const tests = sqliteTable('tests', { id: text('id').primaryKey(), tokenHash: text('token_hash').notNull(), name: text('name').notNull(), started: integer('started').notNull(), deadline: integer('deadline').notNull(), events: text('events').notNull(), progress: text('progress').notNull(), revision: integer('revision').notNull().default(0), synced: integer('synced').notNull(), delayed: integer('delayed').notNull().default(0) });

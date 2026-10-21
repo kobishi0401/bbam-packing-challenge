@@ -1,0 +1,83 @@
+'use client';
+import {useEffect,useRef,useState} from 'react';
+import {products,productById,colors,aggregate,key,duration,complaints,type Item} from '../lib/catalog';
+import type {Order} from '../lib/orders';
+import type {Event} from '../lib/engine';
+import {api} from '../lib/client';
+import Garment from './Garment';
+import OwnResult from './OwnResult';
+type Test={id:string;token:string;name:string;started:number;deadline:number;orders:Order[];events:Event[];bag:Item[];draft:string;offset:number;clock:number};
+const STORAGE='bbam.active.v1';
+const random=()=>Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
+export default function Challenge(){
+ const [test,setTest]=useState<Test|null>(null),ref=useRef<Test|null>(null);
+ const [ready,setReady]=useState(false),[name,setName]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[fatal,setFatal]=useState(false),[syncState,setSync]=useState(''),[now,setNow]=useState(Date.now()),[online,setOnline]=useState(true),[locked,setLocked]=useState(false);
+ const [category,setCategory]=useState('全部'),[selected,setSelected]=useState('A'),[color,setColor]=useState('黑'),[size,setSize]=useState('S'),[modal,setModal]=useState<'check'|'clear'|null>(null),[feedback,setFeedback]=useState('');
+ const syncing=useRef(false),lastSync=useRef(''),tab=useRef(''),clockBase=useRef({wall:Date.now(),mono:0});
+ const completed=test?.events.filter(e=>e.type==='shipment').length??0,replied=test?.events.filter(e=>e.type==='reply').length??0;
+ const end=!!test&&(now>=test.deadline||completed===6),customer=!!test&&completed===2&&replied<2&&!end;
+ const product=productById(selected),order=test?.orders[completed];
+ function save(t:Test){try{localStorage.setItem(STORAGE,JSON.stringify(t));ref.current=t;setTest(t);setSync('待同步');return true;}catch{setFatal(true);setError('裝置儲存空間不足，請通知面試官。操作已暫停。');return false;}}
+ function time(){const t=ref.current;const value=Math.max(Date.now()+(t?.offset??0),clockBase.current.wall+(performance.now()-clockBase.current.mono),t?.clock??0);return value;}
+ async function sync(){const t=ref.current;if(!t||syncing.current)return;const payload=JSON.stringify({events:t.events,progress:{bag:t.bag,draft:t.draft}});if(payload===lastSync.current)return;syncing.current=true;
+  try{await api({action:'sync',id:t.id,token:t.token,...JSON.parse(payload)});lastSync.current=payload;setSync(JSON.stringify({events:ref.current?.events,progress:{bag:ref.current?.bag,draft:ref.current?.draft}})===payload?'已同步':'待同步');}
+  catch(e){const message=(e as Error).message;setSync('待同步');if(/另一個分頁|已刪除|驗證失敗|操作時間/.test(message)){setFatal(true);setError(message);}else if(navigator.onLine)setError(message);}
+  finally{syncing.current=false;}
+ }
+ useEffect(()=>{
+  tab.current=crypto.randomUUID();clockBase.current={wall:Date.now(),mono:performance.now()};
+  try{const data=localStorage.getItem(STORAGE);if(data){const t=JSON.parse(data);if(!t.id||!Array.isArray(t.events)||!Array.isArray(t.orders))throw Error();ref.current=t;setTest(t);clockBase.current.wall=Math.max(Date.now()+t.offset,t.clock);setNow(clockBase.current.wall);setSync('待同步');}}
+  catch{setFatal(true);setError('無法讀取裝置上的測驗紀錄，請通知面試官。');}
+  setOnline(navigator.onLine);setReady(true);
+  const tick=()=>{setNow(time());const t=ref.current;if(t){try{const lease=JSON.parse(localStorage.getItem('bbam.lease')||'null');if(lease&&lease.id!==tab.current&&lease.expires>Date.now()){setLocked(true);}else{localStorage.setItem('bbam.lease',JSON.stringify({id:tab.current,expires:Date.now()+4000}));setLocked(false);}}catch{setLocked(true);}}};
+  tick();const timer=setInterval(tick,250),syncTimer=setInterval(()=>void sync(),4000);
+  const connect=()=>{setOnline(navigator.onLine);if(navigator.onLine){setError('');void sync();}};const visible=()=>{tick();void sync();};
+  window.addEventListener('online',connect);window.addEventListener('offline',connect);document.addEventListener('visibilitychange',visible);
+  if('serviceWorker' in navigator&&process.env.NODE_ENV==='production'){navigator.serviceWorker.register('/sw.js').then(async r=>{await navigator.serviceWorker.ready;const assets=performance.getEntriesByType('resource').map(x=>x.name).filter(x=>new URL(x).origin===location.origin&&/\.(js|css)(\?|$)/.test(x));(r.active||r.waiting)?.postMessage({type:'cache',assets});}).catch(()=>{});}
+  return()=>{clearInterval(timer);clearInterval(syncTimer);window.removeEventListener('online',connect);window.removeEventListener('offline',connect);document.removeEventListener('visibilitychange',visible);try{const lease=JSON.parse(localStorage.getItem('bbam.lease')||'null');if(lease?.id===tab.current)localStorage.removeItem('bbam.lease');}catch{}};
+ },[]);
+ useEffect(()=>{if(end){setModal(null);void sync();}},[end]);
+ useEffect(()=>{if(feedback){const t=setTimeout(()=>setFeedback(''),1500);return()=>clearTimeout(t);}},[feedback]);
+ useEffect(()=>{if(!modal&&!customer)return;const previous=document.activeElement as HTMLElement|null;const dialog=document.querySelector<HTMLElement>('[role="dialog"]');const nodes=()=>Array.from(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]),textarea:not([disabled]),input:not([disabled])')||[]);nodes()[0]?.focus();const trap=(e:KeyboardEvent)=>{if(e.key==='Tab'){const a=nodes();if(!a.length)return;if(e.shiftKey&&document.activeElement===a[0]){e.preventDefault();a.at(-1)?.focus();}else if(!e.shiftKey&&document.activeElement===a.at(-1)){e.preventDefault();a[0].focus();}}if(e.key==='Escape'&&modal)setModal(null);};document.addEventListener('keydown',trap);return()=>{document.removeEventListener('keydown',trap);previous?.focus();};},[modal,customer,replied]);
+ async function start(){if(!name.trim()||busy)return;setBusy(true);setError('');try{
+  localStorage.setItem('bbam.storage-check','1');localStorage.removeItem('bbam.storage-check');
+  let pending=JSON.parse(localStorage.getItem('bbam.pending')||'null');if(!pending){pending={id:crypto.randomUUID(),token:random(),name:name.trim()};localStorage.setItem('bbam.pending',JSON.stringify(pending));}
+  const d=await api({action:'start',...pending});const offset=d.serverNow-Date.now();const t={...pending,...d,events:[],bag:[],draft:'',offset,clock:d.serverNow};clockBase.current={wall:d.serverNow,mono:performance.now()};if(save(t)){localStorage.removeItem('bbam.pending');setNow(d.serverNow);void sync();}
+ }catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+ async function newTest(){
+  const t=ref.current;if(!t||!end||busy||syncState!=='已同步')return;
+  setBusy(true);setError('');
+  try{
+   await api({action:'sync',id:t.id,token:t.token,events:t.events,progress:{bag:t.bag,draft:t.draft}});
+   await api({action:'result',id:t.id,token:t.token});
+   localStorage.removeItem(STORAGE);localStorage.removeItem('bbam.pending');localStorage.removeItem('bbam.lease');
+   location.replace('/');
+  }catch(e){setError((e as Error).message);setBusy(false);}
+ }
+ function operate(fn:(t:Test,n:number)=>Test){const t=ref.current,n=time();if(!t||n>=t.deadline||t.events.filter(e=>e.type==='shipment').length===6||fatal||locked){setNow(n);return;}save({...fn(t,n),clock:n});}
+ function choose(id:string){setSelected(id);const p=productById(id);setColor(p.colors[0]);setSize(p.sizes[0]);}
+ function add(){operate(t=>({...t,bag:aggregate([...t.bag,{product:selected,color,size,quantity:1}])}));}
+ function ship(){const t=ref.current;if(!t)return;operate((t,n)=>{setFeedback('出貨完成');setModal(null);return {...t,events:[...t.events,{type:'shipment',at:n,items:aggregate(t.bag)}],bag:[]};});void sync();}
+ function reply(){if(!test?.draft.trim())return;operate((t,n)=>({...t,events:[...t.events,{type:'reply',at:n,text:t.draft}],draft:''}));void sync();}
+ const disabled=fatal||locked||end||customer;
+ if(!ready)return <div className="loading">正在載入測驗</div>;
+ return <div className={test&&!end?'app active':'app'}>
+ <header className="topbar"><a href="/" className="brand" aria-label="BBAM 首頁">BBAM<span>PACKING CHALLENGE</span></a>{test&&!end?<div className="test-status"><div className="progress-meta"><span>訂單進度</span><strong>{Math.min(completed+1,6)} <small>/ 6</small></strong></div><div className={'timer '+(test.deadline-now<60000?'urgent':'')} aria-label="剩餘時間"><span>剩餘時間</span><strong>{duration(Math.ceil(Math.max(0,test.deadline-now)/1000)*1000)}</strong></div></div>:<a className="admin-link" href="/admin">面試官登入 <span>↗</span></a>}</header>
+ {error&&<div role="alert" className="notice error">{error}{!fatal&&test&&<button onClick={()=>{setError('');void sync();}}>重試同步</button>}</div>}
+ {locked&&!end&&<div className="notice error">測驗已在另一個分頁開啟，請關閉另一分頁後繼續。</div>}
+ {!test?<main className="welcome"><section className="welcome-copy"><span className="eyebrow">BBAM · 營運助理實作測驗</span><h1>出貨模擬測驗<span>BBAM Packing<br/>Challenge</span></h1><div className="facts"><div><strong>06</strong><span>筆訂單</span></div><div><strong>10<small> : 00</small></strong><span>分鐘測驗時間</span></div></div><form onSubmit={e=>{e.preventDefault();void start();}}><label htmlFor="candidate">應徵者姓名</label><input id="candidate" autoComplete="off" maxLength={80} value={name} onChange={e=>setName(e.target.value)} placeholder="請輸入姓名" required/><button className="primary start" disabled={!name.trim()||busy||fatal}>{busy?'正在建立測驗…':'開始測驗'} <span>→</span></button></form><p className="start-note">開始後持續計時，請依訂單挑選商品並完成出貨。</p></section><section className="welcome-art" aria-label="商品款式展示"><div className="art-label">商品備貨區 <span>01 — 17</span></div><div className="hero-garments"><Garment id="B" color="綠"/><Garment id="F" color="卡其"/></div><div className="art-bottom"><span>B / 交叉美背瑜伽上衣</span><span>F / 喇叭瑜伽褲</span></div><div className="mini-line">商品挑選 <i/> 包裝核對 <i/> 確認出貨</div></section></main>:end?<main className="finish"><div className="finish-mark">✓</div><span className="eyebrow">BBAM PACKING CHALLENGE</span><h1>測驗結束</h1><div className="finish-stats"><p>已完成訂單<strong>{completed} <small>/ 6</small></strong></p><p>測驗耗時<strong>{duration(completed===6?test.events.at(-1)!.at-test.started:test.deadline-test.started)}</strong></p></div><p role="status" className="save-status">{syncState==='已同步'?'測驗結果已提交':'測驗結果已保存在此裝置，等待同步'}</p>{syncState!=='已同步'&&<button className="secondary" onClick={()=>void sync()}>重新同步</button>}<div className="restart-test"><button className="primary" disabled={busy||syncState!=='已同步'} onClick={()=>void newTest()}>{busy?'正在準備新測驗…':'開始新測驗'}</button><p className="metric-note">開始新測驗後，已提交的紀錄仍保留於後台。</p></div><OwnResult id={test.id} token={test.token} synced={syncState==='已同步'}/><a className="quiet-link" href="/admin">返回面試官管理區 →</a></main>:<>
+ <div className="work-meta"><span>{test.name} <i/> 出貨作業</span><span className="sync-label"><b className={online?'dot':'dot offline'}/>{online?syncState||'同步中':'離線 · 進度保存在此裝置'}</span></div>
+ <main className="workspace" inert={customer||modal?true:undefined}>
+ <section className="order-panel panel"><div className="section-title"><h2>目前訂單</h2><span>0{completed+1}</span></div><div className="order-heading"><span className="eyebrow">訂單編號</span><h3>{order?.id}</h3><span className="pill">待出貨</span></div><div className="order-items">{order?.items.map(i=><div key={key(i)} className="order-item"><span className="item-code">{i.product}</span><div><strong>{productById(i.product).name}</strong><p>{i.color}色 <i/> {i.size}</p></div><b>×{i.quantity}</b></div>)}</div><div className="order-summary"><span>應出貨數量</span><strong>{order?.items.reduce((a,i)=>a+i.quantity,0)} 件</strong></div><div className="order-dots">{test.orders.map((o,n)=><span key={o.id} className={n<completed?'done':n===completed?'current':''}>{String(n+1).padStart(2,'0')}</span>)}</div></section>
+ <section className="shelf-panel panel"><div className="section-title"><h2>商品貨架</h2><span>17 款商品</span></div><div className="tabs" role="tablist" aria-label="商品類型">{['全部','上衣','褲裝','配件'].map(c=><button key={c} role="tab" aria-selected={category===c} onClick={()=>setCategory(c)}>{c}</button>)}</div><div className="shelf-grid">{products.filter(p=>category==='全部'||p.category===category).map(p=><button key={p.id} className={'product-card '+(selected===p.id?'selected':'')} aria-pressed={selected===p.id} onClick={()=>choose(p.id)} disabled={disabled}><span className="card-code">{p.id}</span><Garment id={p.id} color={p.id===selected?color:p.colors[0]}/><span className="product-name">{p.name}</span>{selected===p.id&&<span className="selected-mark">✓</span>}</button>)}</div><div className="selector"><div className="selection-name"><strong>{selected} 款 · {product.name}</strong><span>{color}色 / {size}</span></div><div className="option-row"><span>顏色</span><div className="color-options">{product.colors.map(c=><button key={c} className={color===c?'chosen':''} aria-pressed={color===c} aria-label={`${c}色`} onClick={()=>setColor(c)}><b style={{background:colors[c]}}/>{c}</button>)}</div></div><div className="option-row" hidden={product.sizes.length===1}><span>尺寸</span><div className="size-options">{product.sizes.map(s=><button key={s} aria-pressed={size===s} className={size===s?'chosen':''} onClick={()=>setSize(s)}>{s}</button>)}</div></div><button className="primary add" disabled={disabled||test.bag.reduce((a,i)=>a+i.quantity,0)>=99} onClick={add}>加入包裝袋 <span>＋</span></button></div></section>
+ <section className="bag-panel panel"><div className="section-title"><h2>包裝袋 <span className="count">{test.bag.reduce((a,i)=>a+i.quantity,0)}</span></h2><button className="text-button" disabled={!test.bag.length||disabled} onClick={()=>setModal('clear')}>清空</button></div><div className="bag-items">{test.bag.length?test.bag.map(i=><div className="bag-item" key={key(i)}><Garment id={i.product} color={i.color}/><div><strong>{i.product} · {productById(i.product).name}</strong><p>{i.color}色 <i/> {i.size}</p><div className="quantity"><button aria-label={`移除一件 ${i.product} ${i.color} ${i.size}`} disabled={disabled} onClick={()=>operate(t=>({...t,bag:t.bag.map(x=>key(x)===key(i)?{...x,quantity:x.quantity-1}:x).filter(x=>x.quantity>0)}))}>−</button><span>{i.quantity}</span><button aria-label={`增加一件 ${i.product} ${i.color} ${i.size}`} disabled={disabled||i.quantity>=99} onClick={()=>operate(t=>({...t,bag:t.bag.map(x=>key(x)===key(i)?{...x,quantity:x.quantity+1}:x)}))}>＋</button></div></div></div>):<div className="empty-bag"><svg viewBox="0 0 64 70" fill="none" aria-hidden="true"><path d="M12 20h40l4 43H8l4-43Z"/><path d="M23 23V13a9 9 0 0 1 18 0v10"/></svg><strong>包裝袋是空的</strong><span>從貨架選擇商品加入</span></div>}</div><div className="bag-footer"><div><span>包裝袋內商品</span><strong>{test.bag.reduce((a,i)=>a+i.quantity,0)} 件</strong></div><button className="secondary" disabled={disabled} onClick={()=>setModal('check')}>檢查商品</button><button className="primary" disabled={disabled} onClick={()=>setModal('check')}>確認出貨 <span>→</span></button></div></section>
+ </main>{feedback&&<div className="toast" role="status">{feedback}</div>}
+ {customer&&<div className="overlay customer"><section className="dialog customer-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-title"><div className="dialog-heading"><span className="eyebrow">客服處理 · {replied+1} / 2</span><span className="live-note">倒數持續中</span></div><h2 id="cs-title">緊急客服訊息</h2><div className="message"><span className="message-label">客人</span>{complaints[replied].map(p=><p key={p}>{p}</p>)}</div><label htmlFor="reply">請輸入客服回覆</label><textarea id="reply" key={replied} value={test.draft} maxLength={20000} onChange={e=>operate(t=>({...t,draft:e.target.value}))} placeholder="請在此輸入回覆…" disabled={fatal||locked}/><div className="dialog-actions"><span>回覆 {replied+1} / 2</span><button className="primary" onClick={reply} disabled={!test.draft.trim()||fatal||locked}>送出回覆 →</button></div></section></div>}
+ {modal&&<div className="overlay"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title"><span className="eyebrow">{order?.id}</span><h2 id="modal-title">{modal==='clear'?'清空包裝袋？':'確認包裝內容'}</h2>{modal==='clear'?<p>包裝袋內的商品將全部移除。</p>:<><div className="check-items">{test.bag.length?test.bag.map(i=><p key={key(i)}><span>{i.product} · {productById(i.product).name}<small>{i.color}色 / {i.size}</small></span><b>× {i.quantity}</b></p>):<p>包裝袋內沒有商品。</p>}</div><p className="muted">確認出貨後，無法修改本筆訂單。</p></>}<div className="dialog-actions"><button className="secondary" onClick={()=>setModal(null)}>繼續包裝</button><button className="primary" disabled={fatal||locked} onClick={()=>{if(modal==='clear'){operate(t=>({...t,bag:[]}));setModal(null);}else ship();}}>{modal==='clear'?'確認清空':'確認出貨'}</button></div></section></div>}
+ </>}
+ </div>;
+}
+
+
+
+
